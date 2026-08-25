@@ -2,6 +2,7 @@
   "name": "Travel Plus",
   "description": "All-in-one AI travel super-app with conversational trip planning, multi-provider failover, deep-link booking, digital document wallet, shopping concierge, safety center, and budget tools.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
-
