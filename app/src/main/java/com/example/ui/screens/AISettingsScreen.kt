@@ -124,6 +124,12 @@ fun AISettingsScreen(
                             .padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                        val hasSecretKey = try {
+                            (com.example.BuildConfig.GEMINI_API_KEY.isNotBlank() && com.example.BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY") ||
+                            (com.example.BuildConfig.OPENROUTER_API_KEY.isNotBlank() && com.example.BuildConfig.OPENROUTER_API_KEY != "MY_OPENROUTER_API_KEY")
+                        } catch (_: Exception) { false }
+                        val isFullyActive = savedApiKey.isNotBlank() || hasSecretKey
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -131,7 +137,7 @@ fun AISettingsScreen(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    Icons.Default.Key,
+                                    Icons.Default.AutoAwesome,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(24.dp)
@@ -139,12 +145,12 @@ fun AISettingsScreen(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
-                                        text = "OpenRouter API Key",
+                                        text = "AI Concierge & Live Models",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 16.sp
                                     )
                                     Text(
-                                        text = "Powers all live AI trip planning & concierge features",
+                                        text = if (hasSecretKey) "Active via AI Studio Secrets (Zero setup needed)" else "Powered by App Secrets & Smart On-Device Engine",
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -154,14 +160,40 @@ fun AISettingsScreen(
                             // Status Indicator
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (savedApiKey.isNotBlank()) EmeraldGreen.copy(alpha = 0.15f) else AmberGold.copy(alpha = 0.15f)
+                                color = if (isFullyActive) EmeraldGreen.copy(alpha = 0.15f) else DeepTeal.copy(alpha = 0.15f)
                             ) {
                                 Text(
-                                    text = if (savedApiKey.isNotBlank()) "ACTIVE" else "NOT SET",
-                                    color = if (savedApiKey.isNotBlank()) EmeraldGreen else AmberGold,
+                                    text = if (isFullyActive) "ACTIVE" else "BUILT-IN",
+                                    color = if (isFullyActive) EmeraldGreen else DeepTeal,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        // Seamless Experience Banner
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = EmeraldGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Keys configured in AI Studio Secrets or app settings are automatically used. End users never have to enter keys manually.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -173,8 +205,8 @@ fun AISettingsScreen(
                                 apiKeyInput = it
                                 keySavedSuccess = false
                             },
-                            label = { Text("OpenRouter API Key (sk-or-v1-...)") },
-                            placeholder = { Text("sk-or-v1-xxxxxxxxxxxxxxxxxxxx") },
+                            label = { Text("Optional API Key Override (OpenRouter or Gemini)") },
+                            placeholder = { Text("sk-or-v1-... or AIza...") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),

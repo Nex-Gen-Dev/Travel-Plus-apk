@@ -17,6 +17,9 @@ val AmberGold = Color(0xFFF59E0B)
 val LightAmber = Color(0xFFFEF3C7)
 
 val EmeraldGreen = Color(0xFF10B981)
+val DeepTeal = Color(0xFF0F766E)
+val OceanBlue = Color(0xFF0284C7)
+val DarkNavy = Color(0xFF07111E)
 val CoralRed = Color(0xFFF43F5E)
 
 val SurfaceLight = Color(0xFFF8FAFC)

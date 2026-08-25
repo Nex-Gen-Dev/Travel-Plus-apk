@@ -1,6 +1,7 @@
 package com.example.data.ai
 
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.local.AIModelConfigDao
 import com.example.data.models.*
 import com.squareup.moshi.Moshi
@@ -15,6 +16,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class AIProviderEngine(
@@ -48,24 +50,37 @@ class AIProviderEngine(
     ): Pair<String, String> = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
 
-        val messagesPayload = mutableListOf<OpenRouterMessage>()
-        messagesPayload.add(OpenRouterMessage(role = "system", content = systemPrompt))
-        
-        // Append last 6 messages for deep conversational context
-        conversationHistory.takeLast(6).forEach { msg ->
-            val role = if (msg.sender == "user") "user" else "assistant"
-            messagesPayload.add(OpenRouterMessage(role = role, content = msg.content))
-        }
-        messagesPayload.add(OpenRouterMessage(role = "user", content = prompt))
+        // 1. Resolve secrets automatically from Secrets Panel / BuildConfig first
+        val secretGeminiKey = try { BuildConfig.GEMINI_API_KEY.trim() } catch (_: Exception) { "" }
+        val secretOpenRouterKey = try { BuildConfig.OPENROUTER_API_KEY.trim() } catch (_: Exception) { "" }
 
-        // 1. If user configured their Global OpenRouter Key, call OpenRouter directly
-        val activeKey = globalApiKey.trim().ifBlank {
-            // Check if any model in database has a key
+        // User manual override from settings if provided
+        val manualKey = globalApiKey.trim().ifBlank {
             val dbConfigs = aiModelConfigDao.getEnabledConfigs()
             dbConfigs.firstOrNull { it.apiKey.isNotBlank() }?.apiKey ?: ""
         }
 
-        if (activeKey.isNotBlank()) {
+        // Try Gemini Direct API if Gemini Key is available from Secrets
+        val activeGeminiKey = if (manualKey.startsWith("AIza", ignoreCase = true)) manualKey else secretGeminiKey
+        if (activeGeminiKey.isNotBlank() && activeGeminiKey != "MY_GEMINI_API_KEY") {
+            val modelName = "Gemini 2.0 Flash (AI Studio)"
+            _engineStatus.value = AIEngineStatus.Generating(modelName, 1)
+            Log.d(TAG, "Calling Gemini 2.0 Flash directly via AI Studio Secrets key.")
+            try {
+                val result = callGeminiDirectApi(activeGeminiKey, prompt, systemPrompt, conversationHistory)
+                if (result.isNotBlank()) {
+                    val duration = System.currentTimeMillis() - startTime
+                    _engineStatus.value = AIEngineStatus.Completed(modelName, duration)
+                    return@withContext Pair(result, modelName)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Gemini direct call error: ${e.message}. Trying secondary failover...")
+            }
+        }
+
+        // Try OpenRouter if key is present from Secrets or manual entry
+        val activeOpenRouterKey = if (manualKey.isNotBlank() && !manualKey.startsWith("AIza", ignoreCase = true)) manualKey else secretOpenRouterKey
+        if (activeOpenRouterKey.isNotBlank() && activeOpenRouterKey != "MY_OPENROUTER_API_KEY") {
             val activeModel = preferredModelId.ifBlank { "google/gemini-2.0-flash-001" }
             val modelDisplayName = when {
                 activeModel.contains("claude") -> "Claude 3.5 Sonnet (OpenRouter)"
@@ -79,8 +94,16 @@ class AIProviderEngine(
             _engineStatus.value = AIEngineStatus.Generating(modelDisplayName, 1)
             Log.d(TAG, "Calling OpenRouter with model: $activeModel")
 
+            val messagesPayload = mutableListOf<OpenRouterMessage>()
+            messagesPayload.add(OpenRouterMessage(role = "system", content = systemPrompt))
+            conversationHistory.takeLast(6).forEach { msg ->
+                val role = if (msg.sender == "user") "user" else "assistant"
+                messagesPayload.add(OpenRouterMessage(role = role, content = msg.content))
+            }
+            messagesPayload.add(OpenRouterMessage(role = "user", content = prompt))
+
             try {
-                val result = callOpenRouterApi(activeModel, activeKey, messagesPayload)
+                val result = callOpenRouterApi(activeModel, activeOpenRouterKey, messagesPayload)
                 if (result.isNotBlank()) {
                     val duration = System.currentTimeMillis() - startTime
                     _engineStatus.value = AIEngineStatus.Completed(modelDisplayName, duration)
@@ -90,20 +113,78 @@ class AIProviderEngine(
                 Log.w(TAG, "OpenRouter direct call failed: ${e.message}. Triggering smart on-device fallback.")
                 _engineStatus.value = AIEngineStatus.SwitchingFailover(
                     failedModel = modelDisplayName,
-                    nextModel = "Travel Plus On-Device Engine",
+                    nextModel = "Travel Plus Smart Engine",
                     reason = e.message ?: "Network / Quota limit"
                 )
-                delay(400)
+                delay(300)
             }
         }
 
-        // 2. Intelligent On-Device Engine Fallback
+        // 3. Smart High-Quality On-Device Engine Fallback (Zero setup required for end users)
         Log.i(TAG, "Generating via Travel Plus Built-in Intelligence Engine.")
         val fallbackText = generateSmartOfflineResponse(prompt)
         val duration = System.currentTimeMillis() - startTime
-        val usedName = if (activeKey.isNotBlank()) "Travel Plus Smart Engine (Offline Mode)" else "Travel Plus On-Device Engine"
+        val usedName = "Travel Plus Smart Engine"
         _engineStatus.value = AIEngineStatus.Completed(usedName, duration)
         return@withContext Pair(fallbackText, usedName)
+    }
+
+    private fun callGeminiDirectApi(
+        apiKey: String,
+        prompt: String,
+        systemPrompt: String,
+        conversationHistory: List<ChatMessage>
+    ): String {
+        val rootJson = JSONObject()
+        
+        // System instruction
+        val sysInstructionObj = JSONObject()
+        val sysPartsArray = org.json.JSONArray()
+        sysPartsArray.put(JSONObject().put("text", systemPrompt))
+        sysInstructionObj.put("parts", sysPartsArray)
+        rootJson.put("systemInstruction", sysInstructionObj)
+
+        // Contents
+        val contentsArray = org.json.JSONArray()
+        conversationHistory.takeLast(6).forEach { msg ->
+            val role = if (msg.sender == "user") "user" else "model"
+            val itemObj = JSONObject()
+            itemObj.put("role", role)
+            val partsArr = org.json.JSONArray()
+            partsArr.put(JSONObject().put("text", msg.content))
+            itemObj.put("parts", partsArr)
+            contentsArray.put(itemObj)
+        }
+        val userItem = JSONObject()
+        userItem.put("role", "user")
+        val userParts = org.json.JSONArray()
+        userParts.put(JSONObject().put("text", prompt))
+        userItem.put("parts", userParts)
+        contentsArray.put(userItem)
+
+        rootJson.put("contents", contentsArray)
+
+        val requestBody = rootJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey"
+
+        val request = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .build()
+
+        val response = okHttpClient.newCall(request).execute()
+        val bodyStr = response.body?.string() ?: ""
+        if (!response.isSuccessful) {
+            throw IllegalStateException("Gemini API error ${response.code}: $bodyStr")
+        }
+
+        val json = JSONObject(bodyStr)
+        val candidates = json.optJSONArray("candidates") ?: return ""
+        val firstCandidate = candidates.optJSONObject(0) ?: return ""
+        val content = firstCandidate.optJSONObject("content") ?: return ""
+        val parts = content.optJSONArray("parts") ?: return ""
+        val firstPart = parts.optJSONObject(0) ?: return ""
+        return firstPart.optString("text", "")
     }
 
     private fun callOpenRouterApi(
