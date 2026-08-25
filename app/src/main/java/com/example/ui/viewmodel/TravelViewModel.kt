@@ -7,19 +7,58 @@ import com.example.data.ai.AIProviderEngine
 import com.example.data.local.TravelPlusDatabase
 import com.example.data.models.*
 import com.example.data.repository.TravelRepository
+import com.example.data.updater.DownloadState
+import com.example.data.updater.GitHubRelease
+import com.example.data.updater.GitHubUpdateManager
+import com.example.data.updater.UpdateCheckResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 class TravelViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val prefs = application.getSharedPreferences("travel_plus_prefs", Application.MODE_PRIVATE)
+
     private val database = TravelPlusDatabase.getDatabase(application, viewModelScope)
     private val aiEngine = AIProviderEngine(database.aiModelConfigDao())
     val repository = TravelRepository(database, aiEngine)
+    val updateManager = GitHubUpdateManager(application)
 
     val aiEngineStatus = aiEngine.engineStatus
+
+    // Global OpenRouter Key & Model state
+    private val _openRouterApiKey = MutableStateFlow(prefs.getString("openrouter_api_key", "") ?: "")
+    val openRouterApiKey: StateFlow<String> = _openRouterApiKey.asStateFlow()
+
+    private val _selectedAIModel = MutableStateFlow(prefs.getString("openrouter_model_id", "google/gemini-2.0-flash-001") ?: "google/gemini-2.0-flash-001")
+    val selectedAIModel: StateFlow<String> = _selectedAIModel.asStateFlow()
+
+    // GitHub Updates State
+    val currentAppVersion: String = updateManager.getCurrentVersionName()
+
+    private val _updateCheckResult = MutableStateFlow<UpdateCheckResult>(UpdateCheckResult.Idle)
+    val updateCheckResult: StateFlow<UpdateCheckResult> = _updateCheckResult.asStateFlow()
+
+    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
+    private val _showUpdateDialog = MutableStateFlow(false)
+    val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
+
+    private val _activeReleaseForDialog = MutableStateFlow<GitHubRelease?>(null)
+    val activeReleaseForDialog: StateFlow<GitHubRelease?> = _activeReleaseForDialog.asStateFlow()
+
+    private val _repoOwner = MutableStateFlow(updateManager.getRepoOwner())
+    val repoOwner: StateFlow<String> = _repoOwner.asStateFlow()
+
+    private val _repoName = MutableStateFlow(updateManager.getRepoName())
+    val repoName: StateFlow<String> = _repoName.asStateFlow()
+
+    private val _autoCheckUpdates = MutableStateFlow(updateManager.isAutoCheckEnabled())
+    val autoCheckUpdates: StateFlow<Boolean> = _autoCheckUpdates.asStateFlow()
 
     val allTrips: StateFlow<List<Trip>> = repository.allTrips
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -30,12 +69,15 @@ class TravelViewModel(application: Application) : AndroidViewModel(application) 
     val allDocuments: StateFlow<List<TravelDocument>> = repository.allDocuments
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _selectedTripId = MutableStateFlow<Long?>(null)
+    // Restore last selected trip from preferences
+    private val _selectedTripId = MutableStateFlow<Long?>(
+        prefs.getLong("last_active_trip_id", -1L).takeIf { it > 0 }
+    )
     val selectedTripId: StateFlow<Long?> = _selectedTripId.asStateFlow()
 
     val currentTrip: StateFlow<Trip?> = combine(allTrips, _selectedTripId) { trips, selectedId ->
         if (selectedId != null) {
-            trips.find { it.id == selectedId }
+            trips.find { it.id == selectedId } ?: trips.firstOrNull()
         } else {
             trips.firstOrNull()
         }
@@ -73,7 +115,7 @@ class TravelViewModel(application: Application) : AndroidViewModel(application) 
         listOf(
             ChatMessage(
                 sender = "assistant",
-                content = "👋 Welcome to **Travel Plus**! I'm your all-in-one AI travel concierge.\n\nWhere would you like to travel? Tell me your dream destination, dates, budget, or vibe (e.g. *'5 days in Tokyo for foodie exploration'* or *'Surprise me with a romantic 4-day European getaway'*)."
+                content = "👋 Welcome to **Travel Plus AI Concierge**!\n\nI'm your all-in-one trip planner. Tell me where you'd like to travel (e.g. *'Plan a 4-day Paris culinary & romantic getaway'* or *'Add a beach relaxation day to my trip'*)."
             )
         )
     )
@@ -94,16 +136,100 @@ class TravelViewModel(application: Application) : AndroidViewModel(application) 
     // Selected Retailer preference
     val preferredRetailer = MutableStateFlow("Amazon") // Amazon, Target, Best Buy, Local
 
-    // Active bottom navigation tab
-    private val _activeTab = MutableStateFlow("ITINERARY")
+    // Active bottom navigation tab with persistence
+    private val _activeTab = MutableStateFlow(prefs.getString("last_active_tab", "ITINERARY") ?: "ITINERARY")
     val activeTab: StateFlow<String> = _activeTab.asStateFlow()
+
+    init {
+        // Initialize AI engine with saved key
+        aiEngine.globalApiKey = _openRouterApiKey.value
+        aiEngine.preferredModelId = _selectedAIModel.value
+
+        // Auto-check for updates on app startup if enabled
+        if (updateManager.isAutoCheckEnabled()) {
+            checkForUpdates(isManualCheck = false)
+        }
+    }
+
+    fun setGlobalOpenRouterKey(key: String) {
+        val cleanKey = key.trim()
+        _openRouterApiKey.value = cleanKey
+        prefs.edit().putString("openrouter_api_key", cleanKey).apply()
+        aiEngine.globalApiKey = cleanKey
+    }
+
+    fun setSelectedAIModel(modelId: String) {
+        val clean = modelId.trim()
+        _selectedAIModel.value = clean
+        prefs.edit().putString("openrouter_model_id", clean).apply()
+        aiEngine.preferredModelId = clean
+    }
 
     fun setActiveTab(tab: String) {
         _activeTab.value = tab
+        prefs.edit().putString("last_active_tab", tab).apply()
     }
 
     fun selectTrip(tripId: Long) {
         _selectedTripId.value = tripId
+        prefs.edit().putLong("last_active_trip_id", tripId).apply()
+    }
+
+    fun createNewTrip(
+        destination: String,
+        startDate: String = "Upcoming",
+        endDate: String = "",
+        durationDays: Int = 4,
+        vibe: String = "Balanced Explorer",
+        budget: Double = 1200.0,
+        departureCity: String = "New York (JFK)"
+    ) {
+        viewModelScope.launch {
+            val newTrip = Trip(
+                destination = destination.trim(),
+                country = extractCountryFromDestination(destination),
+                startDate = startDate,
+                endDate = endDate,
+                durationDays = durationDays,
+                vibe = vibe,
+                totalEstimatedBudget = budget,
+                departureCity = departureCity,
+                summary = "$durationDays-day $vibe adventure in $destination."
+            )
+            val newTripId = repository.createTripWithItinerary(newTrip, emptyList())
+            selectTrip(newTripId)
+        }
+    }
+
+    fun deleteTrip(trip: Trip) {
+        viewModelScope.launch {
+            repository.deleteTrip(trip)
+            val remaining = allTrips.value.filter { it.id != trip.id }
+            if (remaining.isNotEmpty()) {
+                selectTrip(remaining.first().id)
+            } else {
+                _selectedTripId.value = null
+            }
+        }
+    }
+
+    fun saveBooking(doc: TravelDocument) {
+        val tripId = currentTrip.value?.id ?: 1L
+        viewModelScope.launch {
+            repository.insertDocument(doc.copy(tripId = tripId))
+        }
+    }
+
+    fun updateDocument(doc: TravelDocument) {
+        viewModelScope.launch {
+            repository.updateDocument(doc)
+        }
+    }
+
+    fun updateDocumentPhoto(doc: TravelDocument, photoUri: String) {
+        viewModelScope.launch {
+            repository.updateDocument(doc.copy(photoUri = photoUri))
+        }
     }
 
     fun sendMessage(userText: String) {
@@ -293,6 +419,25 @@ class TravelViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun extractCountryFromDestination(dest: String): String {
+        return when {
+            dest.contains("Japan", ignoreCase = true) || dest.contains("Tokyo", ignoreCase = true) || dest.contains("Kyoto", ignoreCase = true) -> "Japan"
+            dest.contains("France", ignoreCase = true) || dest.contains("Paris", ignoreCase = true) -> "France"
+            dest.contains("Italy", ignoreCase = true) || dest.contains("Rome", ignoreCase = true) || dest.contains("Amalfi", ignoreCase = true) -> "Italy"
+            dest.contains("Spain", ignoreCase = true) || dest.contains("Barcelona", ignoreCase = true) -> "Spain"
+            dest.contains("UK", ignoreCase = true) || dest.contains("London", ignoreCase = true) || dest.contains("England", ignoreCase = true) -> "United Kingdom"
+            dest.contains("Iceland", ignoreCase = true) || dest.contains("Reykjavik", ignoreCase = true) -> "Iceland"
+            dest.contains("USA", ignoreCase = true) || dest.contains("Maui", ignoreCase = true) || dest.contains("New York", ignoreCase = true) -> "United States"
+            dest.contains("Mexico", ignoreCase = true) || dest.contains("Cancun", ignoreCase = true) -> "Mexico"
+            dest.contains("Thailand", ignoreCase = true) || dest.contains("Bangkok", ignoreCase = true) -> "Thailand"
+            dest.contains("Australia", ignoreCase = true) || dest.contains("Sydney", ignoreCase = true) -> "Australia"
+            dest.contains("UAE", ignoreCase = true) || dest.contains("Dubai", ignoreCase = true) -> "United Arab Emirates"
+            dest.contains("Switzerland", ignoreCase = true) || dest.contains("Alps", ignoreCase = true) -> "Switzerland"
+            dest.contains(",") -> dest.substringAfterLast(",").trim()
+            else -> "International"
+        }
+    }
+
     private fun extractDestinationHint(prompt: String): String {
         val destKeywords = listOf(
             "Tokyo", "Paris", "Rome", "London", "Barcelona", "Kyoto", "New York", "Bangkok",
@@ -306,4 +451,87 @@ class TravelViewModel(application: Application) : AndroidViewModel(application) 
         }
         return ""
     }
+
+    // ==========================================
+    // GitHub Releases & In-App Updates
+    // ==========================================
+
+    fun checkForUpdates(isManualCheck: Boolean = false) {
+        viewModelScope.launch {
+            _updateCheckResult.value = UpdateCheckResult.Checking
+            val result = updateManager.checkForUpdates(
+                owner = _repoOwner.value,
+                repo = _repoName.value,
+                forceCheck = isManualCheck
+            )
+            _updateCheckResult.value = result
+
+            if (result is UpdateCheckResult.UpdateAvailable) {
+                val dismissedTag = updateManager.getDismissedTag()
+                // If manual check, or user hasn't dismissed this specific version yet, show dialog
+                if (isManualCheck || dismissedTag != result.release.tagName) {
+                    _activeReleaseForDialog.value = result.release
+                    _showUpdateDialog.value = true
+                }
+            }
+        }
+    }
+
+    fun openUpdateDialogForRelease(release: GitHubRelease) {
+        _activeReleaseForDialog.value = release
+        _showUpdateDialog.value = true
+    }
+
+    fun dismissUpdateDialog(rememberLater: Boolean = true) {
+        if (rememberLater) {
+            _activeReleaseForDialog.value?.let { release ->
+                updateManager.setDismissedTag(release.tagName)
+            }
+        }
+        _showUpdateDialog.value = false
+    }
+
+    fun startDownloadAndInstall(release: GitHubRelease) {
+        viewModelScope.launch {
+            updateManager.downloadApk(release) { state ->
+                _downloadState.value = state
+                if (state is DownloadState.ReadyToInstall) {
+                    updateManager.installApk(state.file)
+                }
+            }
+        }
+    }
+
+    fun installDownloadedApk(file: File) {
+        updateManager.installApk(file)
+    }
+
+    fun setRepoConfiguration(owner: String, repo: String) {
+        val cleanOwner = owner.trim()
+        val cleanRepo = repo.trim()
+        updateManager.setRepoOwner(cleanOwner)
+        updateManager.setRepoName(cleanRepo)
+        _repoOwner.value = cleanOwner
+        _repoName.value = cleanRepo
+        // Reset check state on repo change
+        _updateCheckResult.value = UpdateCheckResult.Idle
+    }
+
+    fun setAutoCheckEnabled(enabled: Boolean) {
+        updateManager.setAutoCheckEnabled(enabled)
+        _autoCheckUpdates.value = enabled
+    }
+
+    fun simulateDemoUpdate() {
+        val demoRelease = updateManager.createDemoRelease()
+        val result = UpdateCheckResult.UpdateAvailable(
+            release = demoRelease,
+            currentVersion = currentAppVersion,
+            isNewer = true
+        )
+        _updateCheckResult.value = result
+        _activeReleaseForDialog.value = demoRelease
+        _showUpdateDialog.value = true
+    }
 }
+

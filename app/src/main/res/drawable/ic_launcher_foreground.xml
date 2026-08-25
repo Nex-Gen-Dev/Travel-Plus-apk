@@ -1,21 +1,86 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Travel compass & flight emblem -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,22 C36.33,22 22,36.33 22,54 C22,71.67 36.33,86 54,86 C71.67,86 86,71.67 86,54 C86,36.33 71.67,22 54,22 Z M54,80 C39.66,80 28,68.34 28,54 C28,39.66 39.66,28 54,28 C68.34,28 80,39.66 80,54 C80,68.34 68.34,80 54,80 Z" />
-    <path
-        android:fillColor="#38BDF8"
-        android:pathData="M54,34 L58,50 L74,54 L58,58 L54,74 L50,58 L34,54 L50,50 Z" />
-    <path
-        android:fillColor="#FBBF24"
-        android:pathData="M66,38 L78,34 L74,46 L68,43 L66,38 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M66,38 L54,54 L50,50 Z" />
-</vector>
 
+    <!-- Group centered strictly within the 66dp adaptive icon safe zone -->
+    <group>
+        <!-- 1. Outer Compass Orbit Ring -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeWidth="2.5"
+            android:strokeColor="#38BDF8"
+            android:pathData="M54,27 C39.09,27 27,39.09 27,54 C27,68.91 39.09,81 54,81 C68.91,81 81,68.91 81,54 C81,39.09 68.91,27 54,27 Z" />
+
+        <!-- 2. Compass Cardinal Accent Ticks -->
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M54,23 L56.5,27 L51.5,27 Z" />
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M54,85 L51.5,81 L56.5,81 Z" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M85,54 L81,51.5 L81,56.5 Z" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M23,54 L27,56.5 L27,51.5 Z" />
+
+        <!-- 3. Globe Latitude / Longitude Ellipse (Translucent) -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeWidth="1.5"
+            android:strokeColor="#5038BDF8"
+            android:pathData="M54,27 C43,27 38,39 38,54 C38,69 43,81 54,81 C65,81 70,69 70,54 C70,39 65,27 54,27 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeWidth="1.5"
+            android:strokeColor="#4038BDF8"
+            android:pathData="M27,54 C27,54 39,63 54,63 C69,63 81,54 81,54" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeWidth="1.5"
+            android:strokeColor="#3038BDF8"
+            android:pathData="M31,42 C31,42 41,49 54,49 C67,49 77,42 77,42" />
+
+        <!-- 4. Soaring Aircraft Jet Vapor Trail (Curved Stream) -->
+        <path
+            android:strokeWidth="2.5"
+            android:strokeColor="#8038BDF8"
+            android:pathData="M32,76 C36,70 42,65 50,60" />
+        <path
+            android:strokeWidth="1.5"
+            android:strokeColor="#F59E0B"
+            android:pathData="M30,78 C33,73 38,69 45,64" />
+
+        <!-- 5. Jet Aircraft Shadow/Underbody -->
+        <path
+            android:fillColor="#0284C7"
+            android:pathData="M76,32 L68,46 L58,49 L46,65 L41,68 L43,62 L50,53 L45,47 L52,45 L62,41 Z" />
+
+        <!-- 6. Main Airplane Fuselage & Wings (Clean High-Contrast White) -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M76,32 L46,47 L34,44 L32,48 L44,57 L41,68 L46,65 L52,58 L68,64 L71,60 L62,49 L76,32 Z" />
+
+        <!-- 7. Cockpit Windshield & Wing Accent in Sapphire & Cyan -->
+        <path
+            android:fillColor="#0284C7"
+            android:pathData="M71,35 L68,39 L65,37 Z" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M52,51 L60,54 L56,56 Z" />
+
+        <!-- 8. Luminous Golden Polaris Star / Sparkle Accent (Top Right) -->
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M76,23 L77.5,27.5 L82,29 L77.5,30.5 L76,35 L74.5,30.5 L70,29 L74.5,27.5 Z" />
+            
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M76,27 L76.8,28.2 L78,29 L76.8,29.8 L76,31 L75.2,29.8 L74,29 L75.2,28.2 Z" />
+    </group>
+</vector>

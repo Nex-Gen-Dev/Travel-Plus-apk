@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import com.example.ui.components.TravelTopHeader
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.TravelViewModel
 import com.example.util.DeepLinkHelper
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -271,6 +273,30 @@ fun ItineraryScreen(
 
     // AI Chat & Refinement Bottom Sheet
     if (showChatSheet) {
+        val chatListState = rememberLazyListState()
+        val coroutineScope = rememberCoroutineScope()
+        var showNewTripDialogInSheet by remember { mutableStateOf(false) }
+
+        // Auto-scroll to bottom when new messages arrive
+        LaunchedEffect(chatMessages.size, isGenerating) {
+            if (chatMessages.isNotEmpty()) {
+                chatListState.animateScrollToItem(chatMessages.size - 1)
+            }
+        }
+
+        // Show scroll-to-bottom button when user scrolls up
+        val showScrollToBottom by remember {
+            derivedStateOf {
+                val layoutInfo = chatListState.layoutInfo
+                val totalItems = layoutInfo.totalItemsCount
+                if (totalItems == 0) false
+                else {
+                    val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    lastVisibleItem < totalItems - 1
+                }
+            }
+        }
+
         ModalBottomSheet(
             onDismissRequest = { showChatSheet = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -278,9 +304,10 @@ fun ItineraryScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.85f)
+                    .fillMaxHeight(0.88f)
                     .padding(horizontal = 16.dp)
             ) {
+                // AI Concierge Header with Multi-Trip switcher & New Trip Action
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -291,50 +318,150 @@ fun ItineraryScreen(
                             Icons.Default.AutoAwesome,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "AI Travel Concierge",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                        Column {
+                            Text(
+                                text = "AI Travel Concierge",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = if (currentTrip != null) "Active: ${currentTrip!!.destination}" else "No trip selected",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    IconButton(onClick = { showChatSheet = false }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        FilledTonalButton(
+                            onClick = { showNewTripDialogInSheet = true },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Trip", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        IconButton(onClick = { showChatSheet = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
                     }
                 }
 
-                // Chat Messages List
-                LazyColumn(
+                // Trips Quick Switcher Horizontal Bar
+                if (allTrips.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        allTrips.take(4).forEach { trip ->
+                            val isSelected = trip.id == currentTrip?.id
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.selectTrip(trip.id) },
+                                label = {
+                                    Text(
+                                        text = trip.destination,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                leadingIcon = if (isSelected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                } else null
+                            )
+                        }
+                    }
+                }
+
+                // Chat Messages List with Scroll-to-bottom overlay
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
-                    reverseLayout = false
+                        .fillMaxWidth()
                 ) {
-                    items(chatMessages) { msg ->
-                        ChatMessageBubble(msg = msg)
-                    }
-                    if (isGenerating) {
-                        item {
-                            Row(
-                                modifier = Modifier
-                                    .padding(vertical = 12.dp)
-                                    .fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "AI is drafting trip details & checking failover...",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                    LazyColumn(
+                        state = chatListState,
+                        modifier = Modifier.fillMaxSize(),
+                        reverseLayout = false,
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(chatMessages) { msg ->
+                            ChatMessageBubble(msg = msg)
+                        }
+                        if (isGenerating) {
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(vertical = 12.dp)
+                                        .fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "AI is drafting trip details & exploring places...",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
+                    }
+
+                    // Floating Scroll-to-Bottom Arrow Button
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showScrollToBottom,
+                        enter = fadeIn() + scaleIn(),
+                        exit = fadeOut() + scaleOut(),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 8.dp, end = 8.dp)
+                    ) {
+                        SmallFloatingActionButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    if (chatMessages.isNotEmpty()) {
+                                        chatListState.animateScrollToItem(chatMessages.size - 1)
+                                    }
+                                }
+                            },
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Scroll to bottom",
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Quick Prompt Suggestion Chips
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(quickPrompts) { prompt ->
+                        SuggestionChip(
+                            onClick = {
+                                viewModel.sendMessage(prompt)
+                            },
+                            label = { Text(prompt, fontSize = 11.sp) }
+                        )
                     }
                 }
 
@@ -342,14 +469,14 @@ fun ItineraryScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 12.dp)
+                        .padding(vertical = 8.dp)
                         .navigationBarsPadding(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
                         value = chatInputText,
                         onValueChange = { chatInputText = it },
-                        placeholder = { Text("Ask to edit, add dates, change vibe...") },
+                        placeholder = { Text("Ask to plan a trip, change dates, add places...") },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(24.dp),
                         maxLines = 3
@@ -380,41 +507,83 @@ fun ItineraryScreen(
                     }
                 }
             }
+
+            if (showNewTripDialogInSheet) {
+                CreateTripDialog(
+                    onDismiss = { showNewTripDialogInSheet = false },
+                    onConfirm = { dest, start, days, vibe, budget, dep ->
+                        viewModel.createNewTrip(dest, start, "", days, vibe, budget, dep)
+                        viewModel.sendMessage("Plan a comprehensive $days-day $vibe trip to $dest departing from $dep.")
+                        showNewTripDialogInSheet = false
+                    }
+                )
+            }
         }
     }
 
     // Trip Selector Dialog
     if (showTripSelectorDialog) {
+        var showCreateTripDialogInSelector by remember { mutableStateOf(false) }
+
         AlertDialog(
             onDismissRequest = { showTripSelectorDialog = false },
-            title = { Text("Saved Trips") },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("My Trips", fontWeight = FontWeight.Bold)
+                    FilledTonalButton(
+                        onClick = { showCreateTripDialogInSelector = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("+ New Trip", fontSize = 11.sp)
+                    }
+                }
+            },
             text = {
-                LazyColumn {
-                    items(allTrips) { trip ->
-                        ListItem(
-                            headlineContent = { Text(trip.destination, fontWeight = FontWeight.Bold) },
-                            supportingContent = { Text("${trip.durationDays} Days • ${trip.vibe}") },
-                            leadingContent = {
-                                Icon(
-                                    Icons.Default.Place,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            trailingContent = {
-                                if (trip.id == currentTrip?.id) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = "Selected",
-                                        tint = EmeraldGreen
-                                    )
+                if (allTrips.isEmpty()) {
+                    Text("No trips created yet. Tap '+ New Trip' to start planning!")
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(allTrips) { trip ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (trip.id == currentTrip?.id) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.selectTrip(trip.id)
+                                        showTripSelectorDialog = false
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(trip.destination, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Text("${trip.durationDays} Days • ${trip.vibe}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (trip.id == currentTrip?.id) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = "Active Trip",
+                                            tint = EmeraldGreen,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
-                            },
-                            modifier = Modifier.clickable {
-                                viewModel.selectTrip(trip.id)
-                                showTripSelectorDialog = false
                             }
-                        )
+                        }
                     }
                 }
             },
@@ -424,7 +593,127 @@ fun ItineraryScreen(
                 }
             }
         )
+
+        if (showCreateTripDialogInSelector) {
+            CreateTripDialog(
+                onDismiss = { showCreateTripDialogInSelector = false },
+                onConfirm = { dest, start, days, vibe, budget, dep ->
+                    viewModel.createNewTrip(dest, start, "", days, vibe, budget, dep)
+                    viewModel.sendMessage("Plan a comprehensive $days-day $vibe trip to $dest departing from $dep.")
+                    showCreateTripDialogInSelector = false
+                    showTripSelectorDialog = false
+                }
+            )
+        }
     }
+}
+
+@Composable
+fun CreateTripDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (destination: String, startDate: String, durationDays: Int, vibe: String, budget: Double, departureCity: String) -> Unit
+) {
+    var destination by remember { mutableStateOf("") }
+    var departureCity by remember { mutableStateOf("New York (JFK)") }
+    var startDate by remember { mutableStateOf("Upcoming") }
+    var durationDays by remember { mutableStateOf("4") }
+    var vibe by remember { mutableStateOf("Balanced Explorer") }
+    var budget by remember { mutableStateOf("1500") }
+
+    val vibes = listOf("Balanced Explorer", "Culinary & Foodie", "Luxury & Relaxation", "Budget & Backpacking", "History & Culture", "Adventure & Nature")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.AddLocationAlt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Plan a New Trip", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
+                    OutlinedTextField(
+                        value = destination,
+                        onValueChange = { destination = it },
+                        label = { Text("Destination (e.g. Paris, Tokyo, Maui)") },
+                        placeholder = { Text("e.g. Rome, Italy") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = departureCity,
+                        onValueChange = { departureCity = it },
+                        label = { Text("Departure City / Airport") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = durationDays,
+                            onValueChange = { durationDays = it },
+                            label = { Text("Days") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = budget,
+                            onValueChange = { budget = it },
+                            label = { Text("Budget ($)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    Text("Trip Vibe / Style:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(vibes) { v ->
+                            val isSelected = vibe == v
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { vibe = v },
+                                label = { Text(v, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (destination.isNotBlank()) {
+                        val days = durationDays.toIntOrNull() ?: 4
+                        val bud = budget.toDoubleOrNull() ?: 1500.0
+                        onConfirm(destination, startDate, days, vibe, bud, departureCity)
+                    }
+                },
+                enabled = destination.isNotBlank()
+            ) {
+                Text("Start Planning")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

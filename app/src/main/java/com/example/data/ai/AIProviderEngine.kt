@@ -22,6 +22,9 @@ class AIProviderEngine(
 ) {
     private val TAG = "AIProviderEngine"
 
+    var globalApiKey: String = ""
+    var preferredModelId: String = "google/gemini-2.0-flash-001"
+
     private val _engineStatus = MutableStateFlow<AIEngineStatus>(AIEngineStatus.Idle)
     val engineStatus: StateFlow<AIEngineStatus> = _engineStatus.asStateFlow()
 
@@ -33,9 +36,9 @@ class AIProviderEngine(
     private val responseAdapter = moshi.adapter(OpenRouterResponse::class.java)
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(25, TimeUnit.SECONDS)
         .build()
 
     suspend fun executeWithFailover(
@@ -44,68 +47,63 @@ class AIProviderEngine(
         conversationHistory: List<ChatMessage> = emptyList()
     ): Pair<String, String> = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
-        val models = aiModelConfigDao.getEnabledConfigs().sortedBy { it.priority }
 
-        if (models.isEmpty()) {
-            val offlineResp = generateSmartOfflineResponse(prompt)
-            _engineStatus.value = AIEngineStatus.Completed("Travel Plus On-Device Engine", System.currentTimeMillis() - startTime)
-            return@withContext Pair(offlineResp, "Travel Plus On-Device Engine")
-        }
-
-        var lastError = ""
         val messagesPayload = mutableListOf<OpenRouterMessage>()
         messagesPayload.add(OpenRouterMessage(role = "system", content = systemPrompt))
         
-        // Append last 4 messages for context
-        conversationHistory.takeLast(4).forEach { msg ->
+        // Append last 6 messages for deep conversational context
+        conversationHistory.takeLast(6).forEach { msg ->
             val role = if (msg.sender == "user") "user" else "assistant"
             messagesPayload.add(OpenRouterMessage(role = role, content = msg.content))
         }
         messagesPayload.add(OpenRouterMessage(role = "user", content = prompt))
 
-        for (index in models.indices) {
-            val currentModel = models[index]
-            _engineStatus.value = AIEngineStatus.Generating(currentModel.displayName, index + 1)
-            Log.d(TAG, "Attempting request on Model [Priority #${currentModel.priority}]: ${currentModel.modelId}")
+        // 1. If user configured their Global OpenRouter Key, call OpenRouter directly
+        val activeKey = globalApiKey.trim().ifBlank {
+            // Check if any model in database has a key
+            val dbConfigs = aiModelConfigDao.getEnabledConfigs()
+            dbConfigs.firstOrNull { it.apiKey.isNotBlank() }?.apiKey ?: ""
+        }
+
+        if (activeKey.isNotBlank()) {
+            val activeModel = preferredModelId.ifBlank { "google/gemini-2.0-flash-001" }
+            val modelDisplayName = when {
+                activeModel.contains("claude") -> "Claude 3.5 Sonnet (OpenRouter)"
+                activeModel.contains("gemini") -> "Gemini 2.0 Flash (OpenRouter)"
+                activeModel.contains("gpt-4o") -> "GPT-4o Mini (OpenRouter)"
+                activeModel.contains("llama") -> "Llama 3.3 70B (OpenRouter)"
+                activeModel.contains("deepseek") -> "DeepSeek V3 (OpenRouter)"
+                else -> activeModel
+            }
+
+            _engineStatus.value = AIEngineStatus.Generating(modelDisplayName, 1)
+            Log.d(TAG, "Calling OpenRouter with model: $activeModel")
 
             try {
-                // If the user provided an API key for this model or global openrouter key
-                val effectiveApiKey = currentModel.apiKey.ifBlank {
-                    // Check if any model in the list has a key configured
-                    models.firstOrNull { it.apiKey.isNotBlank() }?.apiKey ?: ""
-                }
-
-                if (effectiveApiKey.isNotBlank()) {
-                    val result = callOpenRouterApi(currentModel.modelId, effectiveApiKey, messagesPayload)
-                    if (result.isNotBlank()) {
-                        val duration = System.currentTimeMillis() - startTime
-                        _engineStatus.value = AIEngineStatus.Completed(currentModel.displayName, duration)
-                        return@withContext Pair(result, currentModel.displayName)
-                    }
-                } else {
-                    // Simulating failover transition when key not configured yet or testing fallback
-                    Log.d(TAG, "No direct OpenRouter key on ${currentModel.displayName}, evaluating auto-failover pipeline...")
-                    delay(350)
+                val result = callOpenRouterApi(activeModel, activeKey, messagesPayload)
+                if (result.isNotBlank()) {
+                    val duration = System.currentTimeMillis() - startTime
+                    _engineStatus.value = AIEngineStatus.Completed(modelDisplayName, duration)
+                    return@withContext Pair(result, modelDisplayName)
                 }
             } catch (e: Exception) {
-                lastError = e.message ?: "Request failed"
-                val nextModelName = if (index + 1 < models.size) models[index + 1].displayName else "Offline Travel Engine"
-                Log.w(TAG, "Failover triggered on ${currentModel.displayName}: $lastError. Switching to $nextModelName")
+                Log.w(TAG, "OpenRouter direct call failed: ${e.message}. Triggering smart on-device fallback.")
                 _engineStatus.value = AIEngineStatus.SwitchingFailover(
-                    failedModel = currentModel.displayName,
-                    nextModel = nextModelName,
-                    reason = "Rate-limited / Quota (HTTP 429/401)"
+                    failedModel = modelDisplayName,
+                    nextModel = "Travel Plus On-Device Engine",
+                    reason = e.message ?: "Network / Quota limit"
                 )
-                delay(600)
+                delay(400)
             }
         }
 
-        // Seamless fallback to On-Device Smart Travel Engine
-        Log.i(TAG, "All cloud endpoints attempted. Activating Travel Plus Intelligence Engine.")
+        // 2. Intelligent On-Device Engine Fallback
+        Log.i(TAG, "Generating via Travel Plus Built-in Intelligence Engine.")
         val fallbackText = generateSmartOfflineResponse(prompt)
         val duration = System.currentTimeMillis() - startTime
-        _engineStatus.value = AIEngineStatus.Completed("Travel Plus Auto-Engine (Llama 3.3 Free Optimized)", duration)
-        return@withContext Pair(fallbackText, "Travel Plus Auto-Engine (Llama 3.3 Free Optimized)")
+        val usedName = if (activeKey.isNotBlank()) "Travel Plus Smart Engine (Offline Mode)" else "Travel Plus On-Device Engine"
+        _engineStatus.value = AIEngineStatus.Completed(usedName, duration)
+        return@withContext Pair(fallbackText, usedName)
     }
 
     private fun callOpenRouterApi(

@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.screens.*
 import com.example.ui.theme.TravelPlusTheme
 import com.example.ui.viewmodel.TravelViewModel
@@ -48,8 +49,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TravelPlusApp(viewModel: TravelViewModel) {
     val activeTabStr by viewModel.activeTab.collectAsStateWithLifecycle()
-    var currentTab by remember { mutableStateOf(NavigationTab.ITINERARY) }
+    val currentTab = remember(activeTabStr) {
+        NavigationTab.entries.find { it.name.equals(activeTabStr, ignoreCase = true) || it.route.equals(activeTabStr, ignoreCase = true) } ?: NavigationTab.ITINERARY
+    }
     var showSettingsScreen by remember { mutableStateOf(false) }
+
+    // GitHub Updates State
+    val showUpdateDialog by viewModel.showUpdateDialog.collectAsStateWithLifecycle()
+    val activeRelease by viewModel.activeReleaseForDialog.collectAsStateWithLifecycle()
+    val downloadState by viewModel.downloadState.collectAsStateWithLifecycle()
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -71,7 +79,7 @@ fun TravelPlusApp(viewModel: TravelViewModel) {
                             val isSelected = currentTab == tab
                             NavigationBarItem(
                                 selected = isSelected,
-                                onClick = { currentTab = tab },
+                                onClick = { viewModel.setActiveTab(tab.name) },
                                 icon = {
                                     Icon(
                                         if (isSelected) tab.selectedIcon else tab.icon,
@@ -130,6 +138,28 @@ fun TravelPlusApp(viewModel: TravelViewModel) {
                 }
             }
         }
+
+        // Automatic / Prompted In-App Update Dialog
+        if (showUpdateDialog && activeRelease != null) {
+            UpdateAvailableDialog(
+                release = activeRelease!!,
+                currentVersion = viewModel.currentAppVersion,
+                downloadState = downloadState,
+                onUpdateClicked = {
+                    viewModel.startDownloadAndInstall(activeRelease!!)
+                },
+                onLaterClicked = {
+                    viewModel.dismissUpdateDialog(rememberLater = true)
+                },
+                onInstallFileClicked = { file ->
+                    viewModel.installDownloadedApk(file)
+                },
+                onDismiss = {
+                    viewModel.dismissUpdateDialog(rememberLater = false)
+                }
+            )
+        }
     }
 }
+
 

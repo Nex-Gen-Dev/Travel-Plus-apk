@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
         TripExpense::class,
         AIModelConfig::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class TravelPlusDatabase : RoomDatabase() {
